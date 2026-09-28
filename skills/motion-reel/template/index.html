@@ -1,0 +1,95 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>film</title>
+<style>
+  /* Fonts: put files in fonts/ and declare them here (canvas text needs them loaded; see window.ready). */
+  /* @font-face { font-family: Display; src: url(fonts/display-700.ttf); font-weight: 700; } */
+  html, body { margin: 0; background: #111; }
+  canvas { display: block; max-width: 100vw; max-height: 100vh; margin: auto; }
+</style>
+<canvas id="c"></canvas>
+<script src="lib/motion.js"></script>
+<script src="timeline.js"></script>
+<script>
+// The film is a pure function of time: window.seek(t) paints frame t. No timers, no CSS animation,
+// no state carried between frames, no Math.random (use M.rng). This starter is a placeholder:
+// replace the shots with the film from docs/shotlist.md, keep the contract.
+const { clamp, lerp, spring, S, track, twos, snap, rng } = M;
+const F = new URLSearchParams(location.search).get("f") || Object.keys(TL.FORMATS)[0];
+const [W, H] = TL.FORMATS[F];
+const cv = document.getElementById("c"); cv.width = W; cv.height = H;
+const g = cv.getContext("2d");
+
+const C = { bg: "#141413", ink: "#F0EEE6", muted: "#8C8A82", accent: "#E8643C" };
+const font = (px, w = 700) => `${w} ${px}px Display, ui-sans-serif, system-ui, sans-serif`;
+
+// Layout from the canvas, never fixed pixels: every format is recomposed, not cropped.
+const L = (() => {
+  const portrait = H > W, u = Math.min(W, H) / 36;          // grid unit
+  return { portrait, u, pad: 3 * u, type: portrait ? 7 * u : 5.5 * u, textX: 3 * u, textY: portrait ? H * 0.3 : H * 0.62 };
+})();
+
+// Text that must fit the canvas width: shrink the size until it does (portrait canvases are narrow).
+function fitFont(text, px, w = 700, max = W - 2 * L.pad) { g.font = font(px, w); const k = Math.min(1, max / g.measureText(text).width); g.font = font(px * k, w); return px * k; }
+
+// Layers that live across shots (a character, a UI container that never cuts) take absolute time and
+// are drawn around the shot functions, so they can start before a shot and continue after it.
+const LAYERS = {
+  under(T) { /* backgrounds, the world, a camera that spans shots */ },
+  over(T) { /* the one element that never cuts, a cursor, captions */ },
+};
+
+// Shots take (local time, absolute time). One function per shot in TL.SHOTS.
+const SHOT = {
+  // Hook: a word slams in on a stiff spring, the accent bar follows a beat later.
+  hook(t) {
+    const s = spring(t, ...S.snappy);
+    g.save(); g.translate(L.textX, L.textY); g.scale(0.85 + 0.15 * s, 0.85 + 0.15 * s);
+    g.globalAlpha = clamp(t * 8);
+    fitFont("Replace me", L.type); g.fillStyle = C.ink; g.textBaseline = "alphabetic"; g.fillText("Replace me", 0, 0);
+    g.restore();
+    g.fillStyle = C.accent; g.fillRect(L.textX, L.textY + L.u, 12 * L.u * spring(t - TL.BEAT, ...S.base), L.u * 0.6);
+  },
+  // Build: a block visits three spots (one spring per move, summed with track), a grid staggers in.
+  build(t) {
+    const cols = L.portrait ? 4 : 8, rows = L.portrait ? 6 : 3, cell = 3 * L.u, x0 = L.pad, y0 = L.portrait ? H * 0.45 : L.pad;
+    const r = rng(7);
+    for (let i = 0; i < cols * rows; i++) {
+      const s = spring(t - 0.02 * i - r() * 0.1, ...S.base), x = x0 + (i % cols) * cell * 1.2, y = y0 + Math.floor(i / cols) * cell * 1.2;
+      g.fillStyle = i % 7 ? C.muted : C.accent; g.globalAlpha = 0.25 + 0.75 * s;
+      g.fillRect(x + cell / 2 * (1 - s), y + cell / 2 * (1 - s), cell * s, cell * s);
+    }
+    g.globalAlpha = 1;
+    const bx = track(t, [[0, x0], [2, W * 0.5], [3, W * 0.7], [4, x0]], S.base);
+    g.fillStyle = C.ink; g.fillRect(bx, H - L.pad - 2 * L.u, 2 * L.u, 2 * L.u);
+  },
+  // End card: text enters after its container starts, holds, and the last frame is settled.
+  end(t) {
+    const s = spring(t, ...S.heavy), px = fitFont("end card", L.type * 0.8, 700, W - 2 * L.pad - 2 * L.u);
+    const boxW = g.measureText("end card").width + 2 * L.u;
+    g.fillStyle = C.accent; g.fillRect(L.textX, L.textY - px * 1.1, boxW * s, px * 1.5);
+    g.globalAlpha = M.swapAlpha(t, 0.15, Infinity); // in after the box starts; never leaves
+    g.fillStyle = C.bg; g.fillText("end card", L.textX + L.u, L.textY);
+    g.globalAlpha = 1;
+  },
+};
+
+function draw(t) {
+  g.fillStyle = C.bg; g.fillRect(0, 0, W, H);
+  LAYERS.under(t);
+  for (const s of TL.SHOTS) if (t >= s.from && (t < s.to || s.to === TL.DUR)) SHOT[s.id]?.(t - s.from, t);
+  LAYERS.over(t);
+}
+
+window.seek = (t) => { draw(t); return true; };
+// Resolve once every font the film uses is loaded (add one load() per face you declare).
+window.ready = Promise.all([document.fonts.load(font(40))]).then(() => document.fonts.ready);
+
+// Live preview in a normal browser: ?t=3.2 freezes a frame, ?f=9x16 switches the canvas.
+if (!navigator.webdriver) window.ready.then(() => {
+  const q = new URLSearchParams(location.search).get("t");
+  if (q !== null) return draw(+q);
+  const t0 = performance.now();
+  (function loop() { draw(((performance.now() - t0) / 1000) % TL.DUR); requestAnimationFrame(loop); })();
+});
+</script>

@@ -1,0 +1,8 @@
+{
+  "name": "motion-buddy",
+  "description": "Motion Buddy: motion videos rendered from code, from an intake questionnaire to a checked 60 fps render",
+  "owner": { "name": "Aleksandr Lugchenko" },
+  "plugins": [
+    { "name": "motion-buddy", "source": "./", "description": "Motion videos rendered from code with an intake questionnaire, a seek(t) engine and a critique loop" }
+  ]
+}

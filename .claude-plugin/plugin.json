@@ -1,0 +1,9 @@
+{
+  "name": "motion-buddy",
+  "version": "0.3.1",
+  "description": "Motion videos rendered from code: an intake questionnaire, one canvas painted by window.seek(t), closed-form springs, headless frame capture + ffmpeg with motion blur, music, SFX and optional voice-over on the same timeline, and a critique loop on contact sheets. 16:9, 9:16 or 1:1 from one timeline, only the formats the user picks.",
+  "author": { "name": "Aleksandr Lugchenko" },
+  "homepage": "https://github.com/TinyFrontier/motion-buddy",
+  "repository": "https://github.com/TinyFrontier/motion-buddy",
+  "keywords": ["motion", "video", "animation", "canvas", "ffmpeg", "explainer", "promo"]
+}

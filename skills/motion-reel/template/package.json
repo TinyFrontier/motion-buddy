@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "draft": "node render.mjs --fps 30 --sub 1 ${F:+--format $F} && node sound.mjs && node mux.mjs ${F:+--format $F}",
+    "final": "node render.mjs --fps 60 --sub 4 ${F:+--format $F} && node sound.mjs && node mux.mjs ${F:+--format $F}"
+  },
+  "devDependencies": { "playwright": "^1.63.0" }
+}

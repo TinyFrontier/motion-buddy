@@ -1,0 +1,14 @@
+# secrets
+.env
+.env.*
+
+# dependencies and renders
+node_modules/
+out/
+
+# regenerable media: voice lines (node voice.mjs), font files (download OFL fonts into fonts/)
+**/assets/vo/
+examples/*/fonts/*.ttf
+examples/*/fonts/*.otf
+
+.DS_Store

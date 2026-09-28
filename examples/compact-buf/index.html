@@ -1,0 +1,247 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>/compact</title>
+<style>
+  @font-face { font-family: JBM; src: url(fonts/jbm-400.ttf); font-weight: 400; }
+  @font-face { font-family: JBM; src: url(fonts/jbm-700.ttf); font-weight: 700; }
+  html, body { margin: 0; background: #141416; }
+  canvas { display: block; width: 100vw; height: auto; }
+</style>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="lib/motion.js"></script>
+<script src="timeline.js"></script>
+<script>
+// /compact — a pure function of time. window.seek(t) paints frame t; nothing carries between frames.
+const { clamp, lerp, spring, S, track, step, fall, hop, twos, snap } = M;
+const { U, DUR, BEAT, TYPE_DT, PROMPTS, SIGN, ROWS, BODY, SINK, CHIPS, CLEAR, FLASH, rowKeys, meterKeys } = TL;
+const W = 1920, H = 1080;
+const g = document.getElementById("c").getContext("2d");
+
+const C = {
+  ground: "#141416", well: "#1B1B20", rail: "#2A2A2F", paper: "#EEF0EA", muted: "#8A8A8A",
+  warn: "#E0A43A", flash: "#F7F8F3",
+  buf: "#4DB6A4", bufDark: "#2C7A6D", bufBase: "#1F5A50", bufLite: "#8FD8CA", ink: "#12302B", eye: "#141416",
+};
+const font = (px, w = 400) => `${w} ${px}px JBM, monospace`;
+
+// ---- stage geometry (units) ----------------------------------------------------------------------
+const WELL = { x: 34, y: 5, w: 24, h: 27 };          // outer; walls 1 U; floor inner at y 31
+const FLOOR = WELL.y + WELL.h - 1, MID = WELL.x + WELL.w / 2;
+const wKeys = rowKeys.map(([t, n]) => [t, BODY[n][0]]);
+const hKeys = rowKeys.map(([t, n]) => [t, BODY[n][1]]);
+
+const R = (x, y, w, h, c) => { g.fillStyle = c; g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); };
+
+// ---- Buf's state at time t (poses on twos) -------------------------------------------------------
+const HEAVY = CHIPS.filter((c) => c.heavy).map((c) => c.tl);
+const BLINKS = [3.2, 7.1, 12.3, 26.1, 31.3, 35.0, 39.0];
+const LOOK = [ // [time, lookX -1..1, lookY -1 up / 0 / 1 down]
+  [0, 0, 0], [0.9, -1, -1], [2.0, 0, 0], [3.9, 0, -1], [4.6, 0, 0], [5.9, 0, -1], [6.6, 0, 0], [7.9, 0, -1], [8.6, 0, 0],
+  [10.2, -1, -1], [11.0, 0, -1], [15.5, 0, 0], [16.2, -1, -1], [17.1, 0, -1], [18.2, 0, 0], [19.4, 0, -1],
+  [22.7, -1, -1], [24.2, 0, -1], [25.0, 0, 0], [32.2, -1, -1], [33.3, 0, 0], [36.2, 0, 1], [37.4, 0, 0],
+];
+
+function buf(t) {
+  const tc = twos(t);
+  const n = step(t, rowKeys);
+  let w = Math.round(track(tc, wKeys, S.playful)), h = Math.round(track(tc, hKeys, S.playful));
+  // landing squash: two poses wider and lower
+  for (const tl of [TL.FALL_IN[1], ...HEAVY]) if (tc >= tl && tc < tl + 2 / 12) { w += 2; h -= 1; }
+  let cx = MID, bottom = FLOOR;
+  if (tc < TL.FALL_IN[1]) bottom = snap(fall(tc, TL.FALL_IN[0], TL.FALL_IN[1], -1, FLOOR), 1);
+  if (tc >= TL.WOBBLE[0] && tc < TL.WOBBLE[1]) cx += Math.floor((tc - TL.WOBBLE[0]) / BEAT) % 2 ? 1 : -1;
+  for (const [a, b] of TL.HOPS) bottom -= snap(hop(tc, a, b, 3), 1);
+  if (tc >= TL.RISE[0]) {
+    const p = clamp((tc - TL.RISE[0]) / (TL.RISE[1] - TL.RISE[0])), e = 1 - (1 - p) ** 2;
+    cx = snap(lerp(MID, 32, e), 1); bottom = snap(lerp(FLOOR, 21, e), 1);
+  }
+  const full = t >= 18.95 && t < CLEAR[0] + FLASH;
+  const [, lx, ly] = LOOK.filter((k) => tc >= k[0]).pop();
+  const closed = tc < TL.FALL_IN[1] + 0.25 || (tc >= 25.0 && tc < 26.0) || BLINKS.some((b) => tc >= b && tc < b + 2 / 12);
+  const happy = (tc >= TL.SUMMARY + 0.1 && tc < TL.SUMMARY + 0.9) || (tc >= TL.HOPS[0][0] - 0.2 && tc < TL.HOPS[1][1] + 0.4);
+  const zap = [...CHIPS.filter((c) => c.row).map((c) => c.ts + SINK), ...CLEAR, 24.0, 24.5, 25.0, 25.5].some((z) => t >= z && t < z + 0.15);
+  return { n, w, h, cx, bottom, x: cx - w / 2, top: bottom - h, full, lx, ly, closed, happy, zap };
+}
+
+function drawBuf(b, t) {
+  const x = b.x * U, y = b.top * U, w = b.w * U, h = b.h * U, hu = U / 2;
+  // antenna (droops when full)
+  if (b.full) { R(x + 0.25 * U, y - U, hu, U, C.bufDark); R(x - 0.25 * U, y - U, U, hu, C.bufDark); R(x - 1.25 * U, y - U, U, U, b.zap ? C.paper : C.bufLite); }
+  else { R(x + 0.25 * U, y - 2 * U, hu, 2 * U, C.bufDark); R(x, y - 3 * U, U, U, b.zap ? C.paper : C.bufLite); }
+  // body with notched top corners
+  R(x, y + hu, w, h - hu, C.buf); R(x + hu, y, w - U, hu, C.buf);
+  // visor
+  const vx = x + U, vy = y + U, vw = w - 2 * U;
+  if (b.closed) R(vx, vy + 0.75 * U, vw, hu, C.eye);
+  else {
+    R(vx, vy, vw, 2 * U, C.eye);
+    const px = vx + vw / 2 - 0.75 * U + b.lx * (vw / 2 - 1.25 * U), py = vy + hu + b.ly * hu * 0.999;
+    if (b.happy) { const cx = vx + vw / 2 - U; R(cx, vy + U, hu, hu, C.paper); R(cx + hu, vy + hu, U, hu, C.paper); R(cx + 1.5 * U, vy + U, hu, hu, C.paper); }
+    else R(snap(px, hu), py, 1.5 * U, U, C.paper);
+  }
+  // belly: swallowed rows, bottom first; the flashing row is the one being cleared
+  const bx = x + U, by = y + 4 * U, bw = w - 2 * U, bh = h - 6 * U;
+  R(bx, by, bw, Math.max(0, bh), C.bufDark);
+  g.save(); g.beginPath(); g.rect(bx, by, bw, Math.max(0, bh)); g.clip();
+  g.font = font(28); g.textBaseline = "middle";
+  for (let i = 0; i < b.n; i++) {
+    const ry = y + h - 2 * U - (i + 1) * 2 * U + 3;
+    const ci = 7 - i, flashing = t >= CLEAR[ci] && t < CLEAR[ci] + FLASH;
+    if (flashing) { R(bx + 3, ry, bw - 6, 2 * U - 6, C.flash); continue; }
+    let cx = bx + 6;
+    for (const label of ROWS[i]) {
+      const cw = g.measureText(label).width + 24;
+      R(cx, ry, cw, 2 * U - 6, C.bufLite);
+      g.fillStyle = C.ink; g.fillText(label, cx + 12, ry + U - 2);
+      cx += cw + 6;
+    }
+  }
+  g.restore();
+  // base
+  R(x, y + h - 2 * U, w, 2 * U, C.bufBase);
+  for (let tx = x + hu; tx < x + w - hu; tx += 1.5 * U) R(tx, y + h - 1.25 * U, hu, hu, C.bufDark);
+}
+
+// ---- chips --------------------------------------------------------------------------------------
+g.font = font(36);
+const chipW = (text) => { g.font = font(44); return g.measureText(text).width + 36; };
+function chipRestX(c, cx) {
+  if (c.pair === undefined) return cx * U - chipW(c.text) / 2;
+  const mate = CHIPS.find((m) => m !== c && m.pair !== undefined && (m.row ? m.row === c.row : m.stuck === c.stuck));
+  const [a, bb] = c.pair === 0 ? [c, mate] : [mate, c];
+  const total = chipW(a.text) + 0.3 * U + chipW(bb.text), left = cx * U - total / 2;
+  return c.pair === 0 ? left : left + chipW(a.text) + 0.3 * U;
+}
+function drawChip(text, x, y, { err = false, alpha = 1 } = {}) {
+  const w = chipW(text);
+  g.globalAlpha = alpha;
+  R(x, y, w, 2 * U, C.paper);
+  if (err) R(x, y, 0.3 * U, 2 * U, C.warn);
+  g.font = font(44); g.textBaseline = "middle"; g.fillStyle = C.ground;
+  g.fillText(text, x + 18 + (err ? 0.3 * U : 0), y + U + 2);
+  g.globalAlpha = 1;
+}
+// Where a chip is at t: null (not on screen), or { x, y, sinking }.
+function chipAt(c, t, b) {
+  if (t < c.tf) return null;
+  const x = chipRestX(c, b.cx), restY = (b.top - 2) * U;
+  const end = c.stuck ? c.drop : c.ts;
+  if (t < c.tl) return { x, y: fall(t, c.tf, c.tl, -2.5 * U, restY) };
+  if (t < end) return { x, y: restY };
+  if (t < end + SINK + 0.1) return { x, y: restY + 2.2 * U * clamp((t - end) / SINK) ** 2, sinking: true };
+  return null;
+}
+
+// ---- UI -----------------------------------------------------------------------------------------
+function typed(p, t) { const dt = p.dt || TYPE_DT; return p.text.slice(0, clamp(Math.floor((t - p.at) / dt) + 1, 0, p.text.length)); }
+function drawPrompt(t) {
+  if (t >= TL.EXIT + 0.3) return;
+  const e = clamp((t - TL.EXIT) / 0.25) ** 2;
+  g.globalAlpha = 1 - e;
+  const x0 = 4 * U - e * 200, y0 = 1.5 * U;
+  g.textBaseline = "top";
+  g.font = font(64, 700); g.fillStyle = C.buf; g.fillText(">", x0, y0);
+  const p = PROMPTS.find((q) => t >= q.at && t < q.erase);
+  const text = p ? typed(p, t) : "";
+  const done = p && text.length === p.text.length;
+  const entered = p && p.enter && t >= p.enter;
+  g.font = font(64); g.fillStyle = entered ? C.buf : C.paper;
+  const tx = x0 + 2 * 38.4;
+  g.fillText(text, tx, y0);
+  const typing = p && !done;
+  const lastKey = p ? p.at + (p.text.length - 1) * (p.dt || TYPE_DT) : -9;
+  const blinkOn = typing || t - lastKey < 0.5 || Math.floor((t - lastKey) / 0.5) % 2 === 1 || !p;
+  const cursorOn = entered ? false : (p ? blinkOn : Math.floor(t / 0.5) % 2 === 0);
+  if (cursorOn) R(tx + g.measureText(text).width + 6, y0 + 6, 38, 66, C.paper);
+  g.globalAlpha = 1;
+}
+
+function drawMeter(t) {
+  if (t >= TL.EXIT + 0.3) return;
+  const e = clamp((t - TL.EXIT) / 0.25) ** 2;
+  g.globalAlpha = 1 - e;
+  // the spring may overshoot in motion, never in the number: clamp to the current segment
+  const seg = meterKeys.filter((k) => k[0] <= t).slice(-2).map((k) => k[1]);
+  const pct = Math.round(clamp(track(t, meterKeys, S.tick), Math.min(...seg), Math.max(...seg)));
+  const target = step(t, meterKeys), warn = target >= 90;
+  const beep = warn && t >= 19.0 && t < 22.0 && (t - 19.0) % BEAT < 0.12;
+  const x0 = 4 * U - e * 200, y0 = 32 * U;
+  g.font = font(56); g.textBaseline = "middle"; g.fillStyle = warn ? C.warn : C.muted;
+  g.fillText("context", x0, y0 + 23);
+  let x = x0 + g.measureText("context").width + 24;
+  const on = Math.round(pct / 10);
+  for (let i = 0; i < 10; i++) { R(x, y0, 30, 46, i < on ? (beep ? C.flash : warn ? C.warn : C.paper) : C.rail); x += 38; }
+  g.fillStyle = warn ? C.warn : C.muted;
+  g.fillText(`${pct}%`, x + 16, y0 + 23);
+  g.globalAlpha = 1;
+}
+
+function drawSign(t) {
+  if (t < SIGN.at) return;
+  g.font = font(96); g.textBaseline = "top"; g.letterSpacing = "8px";
+  const full = g.measureText(SIGN.text).width, x0 = W / 2 - full / 2, y0 = 23.5 * U;
+  const text = typed(SIGN, t);
+  g.fillStyle = C.muted; g.fillText(text, x0, y0);
+  const lastKey = SIGN.at + (SIGN.text.length - 1) * SIGN.dt;
+  const on = t < lastKey + 0.5 || Math.floor((t - lastKey - 0.5) / 0.5) % 2 === 1;
+  if (on) R(x0 + g.measureText(text).width + 6, y0 + 10, 56, 98, C.muted);
+  g.letterSpacing = "0px";
+}
+
+// ---- frame --------------------------------------------------------------------------------------
+function draw(t) {
+  R(0, 0, W, H, C.ground);
+  const b = buf(t);
+  const exitE = clamp((t - TL.EXIT) / 0.3);
+  const wellOn = exitE < 1;
+  // thud: the whole stage drops half a unit for one pose on a landing
+  const tc = twos(t), thud = [TL.FALL_IN[1], ...HEAVY].some((tl) => tc >= tl && tc < tl + 1 / 12);
+  g.save(); if (thud) g.translate(0, U / 2);
+  // well (fades and sinks on exit)
+  if (wellOn) {
+    g.globalAlpha = 1 - exitE;
+    const oy = exitE * exitE * 120;
+    R(WELL.x * U, WELL.y * U + oy, WELL.w * U, WELL.h * U, C.rail);
+    R((WELL.x + 1) * U, (WELL.y + 1) * U + oy, (WELL.w - 2) * U, (WELL.h - 2) * U, C.well);
+    g.globalAlpha = 1;
+  }
+  // chips sinking into the head: behind the body, cut off at the head
+  const chipStates = CHIPS.map((c) => [c, chipAt(c, t, b)]).filter(([, s]) => s);
+  g.save(); g.beginPath(); g.rect(0, 0, W, b.top * U); g.clip();
+  for (const [c, s] of chipStates) if (s.sinking) drawChip(c.text, s.x, s.y, { err: c.err });
+  g.restore();
+  // texture rain (s03): small tokens absorbed by the head
+  for (const d of TL.RAIN) if (t >= d.tf && t < d.tl) {
+    const sz = d.size * U, y = fall(t, d.tf, d.tl, -U, b.top * U - sz);
+    R((b.cx + d.dx) * U - sz / 2, y, sz, sz, C.paper);
+  }
+  if (b.bottom > 0) drawBuf(b, t);
+  for (const [c, s] of chipStates) if (!s.sinking) drawChip(c.text, s.x, s.y, { err: c.err });
+  // summary.md: pops out of the head, then rides it (a hair behind on hops)
+  if (t >= TL.SUMMARY) {
+    // never sinks into the head while it lags: it can only float a hair above on the way down
+    const lag = buf(t - 0.06), p = spring(t - TL.SUMMARY, ...S.playful), popping = t < TL.SUMMARY + 0.4;
+    const y = (Math.min(lag.top, b.top) - 2 * p) * U;
+    g.save(); if (popping) { g.beginPath(); g.rect(0, 0, W, b.top * U); g.clip(); }
+    drawChip("summary.md", b.cx * U - chipW("summary.md") / 2, y);
+    g.restore();
+  }
+  // top wall over everything that falls in
+  if (wellOn) { g.globalAlpha = 1 - exitE; R(WELL.x * U, WELL.y * U + exitE * exitE * 120, WELL.w * U, U, C.rail); g.globalAlpha = 1; }
+  g.restore();
+  drawPrompt(t);
+  drawMeter(t);
+  drawSign(t);
+}
+
+window.seek = (t) => { draw(t); return true; };
+window.ready = Promise.all([document.fonts.load(font(36)), document.fonts.load(font(44, 700))]).then(() => document.fonts.ready);
+
+// Live preview in a normal browser (?t=12.5 freezes a frame); off during headless render.
+if (!navigator.webdriver) window.ready.then(() => {
+  const q = new URLSearchParams(location.search).get("t");
+  if (q !== null) return draw(+q);
+  const t0 = performance.now();
+  (function loop() { draw(((performance.now() - t0) / 1000) % DUR); requestAnimationFrame(loop); })();
+});
+</script>
